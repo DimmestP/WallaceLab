@@ -1,7 +1,7 @@
 ---
 title: "Collate RNA counts and quantify proportion in fractions"
 author: "Edward Wallace"
-date: "26th September 2017"
+date: "26th September 2018"
 output:
   html_document:
     toc: true
