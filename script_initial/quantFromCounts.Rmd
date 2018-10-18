@@ -1,7 +1,8 @@
 ---
-title: "Collate RNA counts and quantify proportion in fractions"
-author: "Edward Wallace"
-date: "26th September 2018"
+Title: "Collate RNA counts and quantify proportion in fractions"
+Version: 0.2
+Authors@R: c(person("Edward", "Wallace", email = "edward.wallace@ed.ac.uk", role = "aut", person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre")
+date: "18th October 2018"
 output:
   html_document:
     toc: true
@@ -27,7 +28,6 @@ knitr::opts_chunk$set(warning=FALSE,message=FALSE,echo=TRUE,cache=FALSE,
 
 ## data processing options, packages, functions
 options(stringsAsFactors=FALSE)  # load character strings as strings
-library(plyr)
 library(reshape2) # data manipulation
 library(tidyverse) # more data manipulation
 library(stringr)
