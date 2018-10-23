@@ -321,7 +321,7 @@ This is to remove low-abundance transcripts, where the counts aren't informative
 
 ```{r fitmixingratiosTSP,dependson=c("TSP_wide","mixingratiosTSP_stan")}
 
-# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore other data.
+# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
 wd5_TSP_Tot <- 
     TSP_Count_TPM %>%
     filter(Fraction=="Tot") %>%
