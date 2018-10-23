@@ -281,9 +281,9 @@ model{
 
 }
 generated quantities{
-  // print("Mixing pars (sup,p100) = (", mixing_sup,",",mixing_p100,")");
-  // print("dispersion phi = ", phi);
-  // print("------------------");
+  print("Mixing pars (sup,p100) = (", mixing_sup,",",mixing_p100,")");
+  print("dispersion phi = ", phi);
+  print("------------------");
 }
 ',
 data=stan_dat,chains = 1,iter = 10)
@@ -321,6 +321,7 @@ This is to remove low-abundance transcripts, where the counts aren't informative
 
 ```{r fitmixingratiosTSP,dependson=c("TSP_wide","mixingratiosTSP_stan")}
 
+# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore other data.
 wd5_TSP_Tot <- 
     TSP_Count_TPM %>%
     filter(Fraction=="Tot") %>%
@@ -329,6 +330,7 @@ wd5_TSP_Tot <-
     filter(wd5) %>%
     .$ORF
 
+# Rearrange data.frame such that there is only one row for each ORF/Condition pair, instead of three (one for each p100, sup and tot count), by introducing three columns, p100, sup and tot. Then filter the poor quality data calculated above.
 TSP_Count_FracBySample <- 
     TSP_Count_TPM %>%
     ungroup() %>%
