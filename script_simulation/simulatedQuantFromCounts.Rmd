@@ -1,0 +1,263 @@
+---
+Title: "Simulate new data from experimental data in order to test model"
+Authors@R: person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre"
+date: "24th October 2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+
+This scripts calculated the required parameters for negative binomial distributions modelling the mRNA count data for pellet, supernat and total values for fungi under treatments at 30C, 42 and 46C.
+    
+Outputs for select (verified) ORFs:
+    - new simulated mRNA count data
+
+
+```{r setup,warning=FALSE,message=FALSE,echo=FALSE}
+
+## knitr options for report generation
+knitr::opts_chunk$set(warning=FALSE,message=FALSE,echo=TRUE,cache=FALSE,
+                      results="show",
+                      fig.path="figure/quantFromCounts-",
+                      cache.path="cache/quantFromCounts-")
+
+
+## data processing options, packages, functions
+options(stringsAsFactors=FALSE)  # load character strings as strings
+library(plyr)
+library(reshape2) # data manipulation
+library(tidyverse) # more data manipulation
+library(stringr)
+
+
+library(rstan) # Bayesian model description and fitting
+# run in parallel
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+txtheader <- 
+"# HeatShock Quinary mRNA
+# Edward Wallace September 2017, Edward.Wallace@ed.ac.uk
+# 
+"
+```
+
+
+# Total, Supernatant, and 100,000g Pellet (TSP) RNA data
+
+## Load data
+
+```{r load_data}
+# setwd("~/Repos/RNAFracQuant/script_initial/")
+Samplesheet <- read_tsv("../data_in/TSP_count/Samplesheet.txt",comment="#")
+ORFselect <- read_tsv("../data_in/orf_coding_EW_select.txt")
+dir_processed <- "../data_processed/TSP_count"
+
+read_ORFCount <- function(file_ext,dir_in) {
+    # Convenience function for reading data in given format
+    paste0(dir_in,"/",file_ext) %>% 
+        read_tsv(
+            col_names = c("ORF","Count"),
+            comment="__")
+}
+
+# Load all data from all the files, with metadata
+TSP_Count <- Samplesheet %>%
+    group_by(File,Sample,Condition,Fraction) %>%
+    do(read_ORFCount(file_ext=.$File[1],dir_in="../data_in/TSP_count/")) %>%
+    mutate(ORF=stringr::str_sub(ORF,end=-5))
+
+# Filter for only selected ORFs, and calculate TPMs
+TSP_Count_TPM <- TSP_Count %>%
+    inner_join(ORFselect) %>%
+    group_by(Sample,Condition,Fraction) %>%
+    mutate(Density=Count/Length, 
+           TPM=Density/sum(Density)*1e6  ) %>%
+    select(Sample,Condition,Fraction,ORF,Count,TPM)
+
+TSP_Count_TPM
+# # check TPM sums to 1mi.
+TSP_Count_TPM %>%
+    summarize(Count=sum(Count),TPM=sum(TPM))
+
+cat(txtheader,
+"# TSP_Count_TPM_tidy.txt
+# TSP measurements, RNA Counts and TPM
+# Tidy format
+# 
+",
+    file=paste0(dir_processed,"TSP_Count_TPM_tidy.txt"),sep="")
+write_tsv(TSP_Count_TPM %>%
+              mutate(TPM=round(TPM,1)),
+          paste0(dir_processed,"TSP_Count_TPM_tidy.txt"),
+          append=TRUE,col_names=TRUE)
+```
+
+### Make wide TSP
+
+```{r TPM_wide,dependson="load_data"}
+TSP_TPM_halfwide <- 
+    TSP_Count_TPM %>%
+    ungroup() %>%
+    select(Condition,Fraction,ORF,TPM) %>%
+    spread(Fraction,TPM)
+
+TSP_TPM_halfwide
+
+cat(txtheader,
+"# TSP_TPM_halfwide.txt
+# TSP measurements, TPM
+# Half-wide, collected by ORF.
+# One column per fraction, collected by Condition
+# 
+",
+    file=paste0(dir_processed,"TSP_TPM_halfwide.txt"),sep="")
+write_tsv(TSP_Count_TPM %>%
+              ungroup() %>%
+              select(Condition,Fraction,ORF,TPM) %>%
+              mutate(TPM=round(TPM,1)) %>%
+              spread(Fraction,TPM),
+          paste0(dir_processed,"TSP_TPM_halfwide.txt"),
+          append=TRUE,col_names=TRUE)
+
+TSP_TPM_wide <- 
+    TSP_Count_TPM %>%
+    ungroup() %>%
+    select(Condition,Fraction,ORF,TPM) %>%
+    unite(Var,Condition,Fraction,sep="_") %>%
+    spread(Var,TPM)
+
+TSP_TPM_wide
+
+cat(txtheader,
+"# TSP_TPM_wide.txt
+# TSP measurements, TPM
+# Wide, collected by ORF.
+# Each column is TPM for that ORF in a given Condition and Fraction
+# 
+",
+    file=paste0(dir_processed,"TSP_TPM_wide.txt"),sep="")
+write_tsv(TSP_Count_TPM %>%
+              ungroup() %>%
+              select(Condition,Fraction,ORF,TPM) %>%
+              unite(Var,Condition,Fraction,sep="_") %>%
+              mutate(TPM=round(TPM,1)) %>%
+              spread(Var,TPM),
+          paste0(dir_processed,"TSP_TPM_wide.txt"),
+          append=TRUE,col_names=TRUE)
+```
+
+## Estimate proportion in 100,000g Supernatant (pSup) for TSP
+
+
+#### STAN functions to fit simulation parameters
+
+```{r simulation_parametersTSP_stan}
+
+mdat_sup_simulationTSP <- function(ctdata) {
+    ## make data for stan fit
+    head(ctdata)
+    list(NRNA=nrow(ctdata),
+         tot_obs=as.integer(round(ctdata$Tot)),
+         sup_obs=as.integer(round(ctdata$Sup))
+         )
+    
+}
+
+make_sup_simulationTSP <- function(ctdata) {
+    stan_dat <- mdat_sup_simulationTSP(ctdata)
+    stan(model_code='// -*- mode: C -*-
+data {
+  // Number of RNAs
+  int<lower=1> NRNA;     
+  
+  // Note: These are all integers
+  // columns t, s
+  int<lower=0> tot_obs[NRNA];
+  int<lower=0> sup_obs[NRNA];
+}
+parameters {
+  // Unnormalized simulation parameters
+  real<lower=0> alpha_sup;
+  real<lower=0, higher=1> rho[NRNA];
+  
+  // dispersion parameter for counts
+  real phi;
+}
+model{
+  // mixing ratios
+  alpha_sup ~ gamma(1,1);
+  rho ~ beta(1,1);
+  // Cauchy prior for negbin dispersion parameter
+  phi ~ cauchy(0,3);
+  
+  for(idx in 1:NRNA){ 
+    // count distn negative binomial with specified means
+    // Total
+    sup_obs[idx] ~ neg_binomial_2(alpha_sup * tot_obs[idx] * rho[idx], phi);
+  }
+
+}
+generated quantities{
+  // print("Mixing pars (sup,p100) = ("mixing_sup,",",mixing_p100,")");
+  //print("dispersion phi = ", phi);
+  //print("------------------");
+}
+',
+data=stan_dat,chains = 1,iter = 10)
+}
+
+fit_sup_simulationTSP <- function(ctdata,stan_sup_simulation=NULL,...) {
+    stan_dat <- mdat_sup_simulationTSP(ctdata)
+    if (is.null(stan_sup_simulation)) {
+        stan_sup_simulation <- make_sup_simulationTSP(ctdata)
+    }
+    stan_sup_simulation_fit <- stan(fit=stan_sup_simulation,data=stan_dat,chains = 4,...)
+    return(stan_sup_simulation_fit)
+}
+
+getsup_simulationratiosTSP <- function(ctdata,iter=1000,
+                                control=list(adapt_delta=0.85),...) {
+    # head(ctdata) %>% print()
+    stansummary <- fit_sup_simulationTSP(ctdata=ctdata,iter=iter,control=control,...) %>%
+        summary()
+    # return medians
+    data.frame(
+        sup_simulation.Sup=stansummary$summary["alpha_sup","50%"],
+        lp.n_eff  =stansummary$summary["lp__","n_eff"],
+        lp.Rhat   =stansummary$summary["lp__","Rhat"])
+}
+
+# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
+wd5_TSP_Tot <- 
+    TSP_Count_TPM %>%
+    filter(Fraction=="Tot") %>%
+    group_by(ORF) %>%
+    summarise(d5 = sum(TPM > 5),wd5=(d5==4)) %>%
+    filter(wd5) %>%
+    .$ORF
+
+# Rearrange data.frame such that there is only one row for each ORF/Condition pair, instead of three (one for each p100, sup and tot count), by introducing three columns, p100, sup and tot. Then filter the poor quality data calculated above.
+TSP_Count_FracBySample <- 
+    TSP_Count_TPM %>%
+    ungroup() %>%
+    select(Condition,Fraction,ORF,Count) %>%
+    spread(Fraction,Count) %>%
+    filter(ORF %in% wd5_TSP_Tot)
+
+# compile stan model, test it with 10 iterations, save output
+stan_sup_simulationTSP_wd5 <- TSP_Count_FracBySample %>%
+    make_sup_simulationTSP()
+
+# Specify a seed for random number generator so output is reproducible
+myseed = 39
+
+# run stan mixing ratio inference, reusing same model
+sup_simulation_TSP <- TSP_Count_FracBySample %>%
+    ddply(~Condition,getsup_simulationratiosTSP,
+          stan_sup_simulation=stan_sup_simulationTSP_wd5,iter=1000,seed=myseed)
+
+sup_simulation_TSP
+```
