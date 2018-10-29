@@ -1,0 +1,134 @@
+---
+Title: "Produce simulated actual total RNA counts data from lognormal with parameters deduced from experimental data"
+Authors@R:  person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre")
+date: "26th October 2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup}
+library(tidyverse) # data manipulation
+library(magrittr) # expert piping
+library(rstan) # Bayesian model description and fitting
+# run in parallel
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+library(shinystan) # package for GUI allowing easy analysis of stanfit object
+```
+
+
+
+```{r load_data}
+ setwd("~/Documents/WallaceLab/code/RNAFracQuant/script_simulation/")
+Samplesheet <- read_tsv("../data_in/TSP_count/Samplesheet.txt",comment="#")
+ORFselect <- read_tsv("../data_in/orf_coding_EW_select.txt")
+dir_processed <- "../data_processed/TSP_count"
+real_tot_simulated <- read_tsv("../data_simulated/actual_total_simulation_data.tsv")
+
+read_ORFCount <- function(file_ext,dir_in) {
+    # Convenience function for reading data in given format
+    paste0(dir_in,"/",file_ext) %>% 
+        read_tsv(
+            col_names = c("ORF","Count"),
+            comment="__")
+}
+
+# Load all data from all the files, with metadata
+TSP_Count <- Samplesheet %>%
+    group_by(File,Sample,Condition,Fraction) %>%
+    do(read_ORFCount(file_ext=.$File[1],dir_in="../data_in/TSP_count/")) %>%
+    mutate(ORF=stringr::str_sub(ORF,end=-5))
+
+# Filter for only selected ORFs, and calculate TPMs
+TSP_Count_TPM <- TSP_Count %>%
+    inner_join(ORFselect) %>%
+    group_by(Sample,Condition,Fraction) %>%
+    mutate(Density=Count/Length, 
+           TPM=Density/sum(Density)*1e6  ) %>%
+    select(Sample,Condition,Fraction,ORF,Count,TPM)
+
+TSP_Count_TPM
+# # check TPM sums to 1mi.
+TSP_Count_TPM %>%
+    summarize(Count=sum(Count),TPM=sum(TPM))
+```
+```{r tot_obs_NBmodel_parameter_calc_stan}
+NB_parameter_calc = function(stan_data){
+stan(model_code = "// -*- mode: C -*-
+     data{
+      // number of RNA
+      int<lower=0> NRNA;
+
+      // experimental count data for tot RNA
+      int<lower=0> observed_total_RNA[NRNA];
+
+      // simulated actual count data for tot RNA
+      int<lower=0> actual_total_RNA[100];
+     }
+    parameters{
+      // alpha parameter for bluring actual total counts 
+      real alpha_observed;
+
+      // dispersion parameter for NB
+      real phi;
+    }
+    model{
+      // alpha prior is a gamma function
+      alpha_observed ~ gamma(1,1);
+
+      // cauchy function chosen for phi
+      phi ~ cauchy(0,3);
+
+      for(idx in 1:100){
+        observed_total_RNA[idx] ~ neg_binomial_2(alpha_observed*actual_total_RNA[idx], phi);
+      }
+    }
+     ",data=stan_data, chains = 4, iter =1000)
+}
+```
+
+```{r run_stan_NBmodel_parameter_calc, dependson="tot_obs_NBmodel_parameter_calc_stan"}
+# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
+wd5_TSP_Tot <- 
+    TSP_Count_TPM %>%
+    filter(Fraction=="Tot") %>%
+    group_by(ORF) %>%
+    summarise(d5 = sum(TPM > 5),wd5=(d5==4)) %>%
+    filter(wd5) %>%
+    .$ORF
+
+# Rearrange data.frame such that there is only one row for each ORF/Condition pair, instead of three (one for each p100, sup and tot count), by introducing three columns, p100, sup and tot. Then filter the poor quality data calculated above.
+TSP_Count_FracBySample <- 
+    TSP_Count_TPM %>%
+    ungroup() %>%
+    select(Condition,Fraction,ORF,Count) %>%
+    spread(Fraction,Count) %>%
+    filter(ORF %in% wd5_TSP_Tot)
+
+## format data for stan 
+experimental_data_tot <-  list(NRNA=nrow(filter(TSP_Count_FracBySample, Condition == "30C")),
+         observed_total_RNA=as.integer(round(filter(TSP_Count_FracBySample, Condition == "30C")$Tot)), actual_total_RNA = real_tot_simulated)
+
+# run stan model
+tot_obs_simulations_parameters <- NB_parameter_calc(experimental_data_tot)
+
+# run shinystan
+#launch_shinystan(tot_obs_simulations_parameters)
+```
+
+```{r simulate_actual_RNA_counts_from_stanfit_parameters}
+negbin_alpha_observed <- tot_obs_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(alpha_observed)
+negbin_phi <- tot_obs_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(phi)
+set.seed(102)
+for(idx in 1:100){
+simulated_observed_total_RNA_counts[idx] <- rnbinom(1,negbin_alpha_observed*actual_total_RNA[idx], negbin_phi)
+}
+write_tsv(data.frame(simulated_observed_total_RNA_counts = simulated_observed_total_RNA_counts), path = "../data_processed/observed_total_simulation_data.tsv")
+```
