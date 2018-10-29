@@ -1,5 +1,5 @@
 ---
-Title: "Produce simulated total RNA counts data from negbin with parameters deduced from experiment"
+Title: "Produce simulated actual total RNA counts data from lognormal with parameters deduced from experimental data"
 Authors@R:  person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre")
 date: "26th October 2018"
 output:
