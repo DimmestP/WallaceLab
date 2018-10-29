@@ -77,7 +77,7 @@ stan(model_code = "// -*- mode: C -*-
       alpha_tot ~ gamma(1,1);
 
       // total RNA counts prior is a lognormal function
-      actual_total_RNA ~ lognormal(1000,100);
+      actual_total_RNA ~ lognormal(1,0.1);
 
       // cauchy function chosen for phi
       phi ~ cauchy(0,3);
@@ -86,7 +86,7 @@ stan(model_code = "// -*- mode: C -*-
         observed_total_RNA[idx] ~ neg_binomial_2(alpha_tot*actual_total_RNA[idx],phi);
       }
     }
-     ",data=stan_data, chains = 4)
+     ",data=stan_data, chains = 4, iter =300)
 }
 ```
 
