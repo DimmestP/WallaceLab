@@ -1,5 +1,5 @@
 ---
-Title: "Produce simulated actual total RNA counts data from lognormal with parameters deduced from experimental data"
+Title: "Produce simulated total cell RNA counts from  a lognormal distribution with parameters deduced from experimental data"
 Authors@R:  person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre")
 date: "26th October 2018"
 output:
@@ -54,8 +54,8 @@ TSP_Count_TPM
 TSP_Count_TPM %>%
     summarize(Count=sum(Count),TPM=sum(TPM))
 ```
-```{r tot_obs_NBmodel_parameter_calc_stan}
-NB_parameter_calc = function(stan_data){
+```{r lognormal_actual_tot_counts_stanfit}
+lognormal_actual_counts_stanfit = function(stan_data){
 stan(model_code = "// -*- mode: C -*-
      data{
       // number of RNA
@@ -73,10 +73,10 @@ stan(model_code = "// -*- mode: C -*-
     }
     model{
       // alpha prior is a gamma function
-      alpha ~ gamma(1000,100);
+      alpha ~ gamma(1,1);
 
       // gamma function chosen for phi
-      phi ~ gamma(100,10);
+      phi ~ cauchy(0,3);
 
       for(idx in 1:NRNA){
         observed_total_RNA[idx] ~ lognormal(alpha,phi);
@@ -86,7 +86,7 @@ stan(model_code = "// -*- mode: C -*-
 }
 ```
 
-```{r run_stan_NBmodel_parameter_calc, dependson="tot_obs_NBmodel_parameter_calc_stan"}
+```{r run_stan_lognormal_parameter_calc, dependson="lognormal_actual_tot_counts_stanfit"}
 # Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
 wd5_TSP_Tot <- 
     TSP_Count_TPM %>%
@@ -109,20 +109,20 @@ experimental_data_tot <-  list(NRNA=nrow(filter(TSP_Count_FracBySample, Conditio
          observed_total_RNA=as.integer(round(filter(TSP_Count_FracBySample, Condition == "30C")$Tot)))
 
 # run stan model
-tot_obs_simulations_parameters <- NB_parameter_calc(experimental_data_tot)
+tot_actual_stanfit <- lognormal_actual_counts_stanfit(experimental_data_tot)
 
 # run shinystan
 #launch_shinystan(tot_obs_simulations_parameters)
 ```
 
 ```{r simulate_actual_RNA_counts_from_stanfit_parameters}
-lognorm_mean <- tot_obs_simulations_parameters %>%    
+lognorm_mean <- tot_actual_stanfit %>%    
                   rstan::extract() %$% 
                       mean(alpha)
-lognorm_sd <- tot_obs_simulations_parameters %>%    
+lognorm_sd <- tot_actual_stanfit %>%    
                   rstan::extract() %$% 
                       mean(phi)
 set.seed(102)
-simulated_actual_total_RNA_counts <- rlnorm(100,lognorm_mean,lognorm_sd)
+simulated_actual_total_RNA_counts <- rlnorm(5000,lognorm_mean,lognorm_sd)
 write_tsv(data.frame(simulated_actual_total_RNA_counts = simulated_actual_total_RNA_counts), path = "../data_processed/actual_total_simulation_data.tsv")
 ```
