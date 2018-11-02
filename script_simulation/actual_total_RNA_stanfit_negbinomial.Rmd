@@ -124,5 +124,5 @@ negbinomial_sd <- tot_actual_stanfit %>%
                       mean(phi)
 set.seed(102)
 simulated_actual_total_RNA_counts <- rnbinom(5000,negbinomial_mean,negbinomial_sd)
-write_tsv(data.frame(simulated_actual_total_RNA_counts = simulated_actual_total_RNA_counts), path = "../data_processed/actual_total_negbinomial_check.tsv")
+write_tsv(data.frame(simulated_actual_total_RNA_counts = simulated_actual_total_RNA_counts), path = "../data_simulated/actual_total_negbinomial_check.tsv")
 ```

@@ -9,6 +9,7 @@ output:
 ---
 
 ```{r setup}
+library(knitr)
 library(tidyverse) # data manipulation
 library(magrittr) # expert piping
 library(rstan) # Bayesian model description and fitting
@@ -86,7 +87,7 @@ stan(model_code = "// -*- mode: C -*-
 }
 ```
 
-```{r run_stan_lognormal_parameter_calc, dependson="lognormal_actual_tot_counts_stanfit"}
+```{r run_stan_lognormal_parameter_calc, dependson="lognormal_actual_tot_counts_stanfit",results="hide"}
 # Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
 wd5_TSP_Tot <- 
     TSP_Count_TPM %>%
@@ -124,5 +125,5 @@ lognorm_sd <- tot_actual_stanfit %>%
                       mean(phi)
 set.seed(102)
 simulated_actual_total_RNA_counts <- rlnorm(5000,lognorm_mean,lognorm_sd)
-write_tsv(data.frame(simulated_actual_total_RNA_counts = simulated_actual_total_RNA_counts), path = "../data_processed/actual_total_simulation_data.tsv")
+write_tsv(data.frame(simulated_actual_total_RNA_counts = simulated_actual_total_RNA_counts), path = "../data_simulated/actual_total_simulation_data.tsv")
 ```

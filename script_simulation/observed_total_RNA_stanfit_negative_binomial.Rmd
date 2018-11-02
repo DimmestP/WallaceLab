@@ -61,12 +61,13 @@ stan(model_code = "// -*- mode: C -*-
      data{
       // number of RNA
       int<lower=0> NRNA;
+      int<lower=0> NRNA_simulated;
 
       // experimental count data for tot RNA
       int<lower=0> observed_total_RNA[NRNA];
 
       // simulated actual count data for tot RNA
-      int<lower=0> actual_total_RNA[100];
+      int<lower=0> actual_total_RNA[NRNA_simulated];
      }
     parameters{
       // alpha parameter for bluring actual total counts 
@@ -82,7 +83,7 @@ stan(model_code = "// -*- mode: C -*-
       // cauchy function chosen for phi
       phi ~ cauchy(0,3);
 
-      for(idx in 1:100){
+      for(idx in 1:NRNA_simulated){
         observed_total_RNA[idx] ~ neg_binomial_2(alpha_observed*actual_total_RNA[idx], phi);
       }
     }
@@ -109,7 +110,8 @@ TSP_Count_FracBySample <-
     filter(ORF %in% wd5_TSP_Tot)
 
 ## format data for stan 
-experimental_data_tot <-  list(NRNA=nrow(filter(TSP_Count_FracBySample, Condition == "30C")),
+experimental_data_tot <-  list(NRNA=length(filter(TSP_Count_FracBySample, Condition == "30C")$Tot), 
+         NRNA_simulated=length(real_tot_simulated$simulated_actual_total_RNA_counts),
          observed_total_RNA=as.integer(round(filter(TSP_Count_FracBySample, Condition == "30C")$Tot)), actual_total_RNA = as.integer(real_tot_simulated$simulated_actual_total_RNA_counts))
 
 # run stan model
@@ -127,8 +129,8 @@ negbin_phi <- tot_obs_simulations_parameters %>%
                   rstan::extract() %$% 
                       mean(phi)
 set.seed(102)
-simulated_observed_total_RNA_counts <- c(1:100)
-for(idx in 1:100){
+simulated_observed_total_RNA_counts <- c(1:5000)
+for(idx in 1:2000){
 simulated_observed_total_RNA_counts[idx] <- rnbinom(1,negbin_alpha_observed*as.integer(real_tot_simulated$simulated_actual_total_RNA_counts[idx]), negbin_phi)
 }
 write_tsv(data.frame(simulated_observed_total_RNA_counts = simulated_observed_total_RNA_counts), path = "../data_processed/observed_total_simulation_data.tsv")
