@@ -1,0 +1,167 @@
+---
+Title: "Produce simulated observed pellet and supernate RNA counts data from a stanfit negative binomial distribution"
+Authors@R:  person("Samuel Joseph", "Haynes", email = "e1895111@ed.ac.uk", role = "cre")
+date: "26th October 2018"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup}
+library(tidyverse) # data manipulation
+library(magrittr) # expert piping
+library(rstan) # Bayesian model description and fitting
+# run in parallel
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+library(shinystan) # package for GUI allowing easy analysis of stanfit object
+```
+
+
+
+```{r load_data}
+ setwd("~/Documents/WallaceLab/code/RNAFracQuant/script_simulation/")
+Samplesheet <- read_tsv("../data_in/TSP_count/Samplesheet.txt",comment="#")
+ORFselect <- read_tsv("../data_in/orf_coding_EW_select.txt")
+dir_processed <- "../data_processed/TSP_count"
+real_tot_simulated <- read_tsv("../data_simulated/actual_total_simulation_data.tsv")
+
+read_ORFCount <- function(file_ext,dir_in) {
+    # Convenience function for reading data in given format
+    paste0(dir_in,"/",file_ext) %>% 
+        read_tsv(
+            col_names = c("ORF","Count"),
+            comment="__")
+}
+
+# Load all data from all the files, with metadata
+TSP_Count <- Samplesheet %>%
+    group_by(File,Sample,Condition,Fraction) %>%
+    do(read_ORFCount(file_ext=.$File[1],dir_in="../data_in/TSP_count/")) %>%
+    mutate(ORF=stringr::str_sub(ORF,end=-5))
+
+# Filter for only selected ORFs, and calculate TPMs
+TSP_Count_TPM <- TSP_Count %>%
+    inner_join(ORFselect) %>%
+    group_by(Sample,Condition,Fraction) %>%
+    mutate(Density=Count/Length, 
+           TPM=Density/sum(Density)*1e6  ) %>%
+    select(Sample,Condition,Fraction,ORF,Count,TPM)
+
+TSP_Count_TPM
+# # check TPM sums to 1mi.
+TSP_Count_TPM %>%
+    summarize(Count=sum(Count),TPM=sum(TPM))
+```
+```{r pellet_supernate_obs_NBmodel_parameter_calc_stan}
+NB_parameter_calc = function(stan_data){
+stan(model_code = "// -*- mode: C -*-
+     data{
+      // number of RNA
+      int<lower=0> NRNA;
+      int<lower=0> NRNA_simulated;
+
+      // experimental count data for pellet RNA
+      int<lower=0> observed_pellet_RNA[NRNA];
+
+      // experimental count data for supernate RNA
+      int<lower=0> observed_supernate_RNA[NRNA];
+
+      // simulated actual count data for tot RNA
+      int<lower=0> actual_total_RNA[NRNA_simulated];
+     }
+    parameters{
+      // alpha parameter represents noise to added to actual total counts 
+      real<lower=0> alpha_pellet;
+      real<lower=0> alpha_supernate;
+
+      // rho parameter for fraction of tot RNA in pellet
+      //real<lower=0> rho_pellet[NRNA];
+
+      // dispersion parameters for NB
+       real phi_supernate;
+       real phi_pellet;
+    }
+     /*transformed parameters{
+      real<lower=0> rho_supernate[NRNA];
+      for(idx in 1:NRNA){
+        rho_supernate[idx] = (1 - rho_pellet[idx]);
+      }
+    }*/
+   
+    model{
+      // alpha prior is a gamma function
+      alpha_pellet ~ gamma(1,1);
+      alpha_supernate ~ gamma(1,1);
+
+      // rho prior is a beta function
+      //rho_pellet ~ beta(1,1);
+
+      // cauchy function chosen for phi
+      phi_pellet ~ cauchy(0,3);
+      phi_supernate ~ cauchy(0,3);
+
+      for(idx in 1:NRNA_simulated){
+        observed_pellet_RNA[idx] ~ neg_binomial_2(alpha_pellet*actual_total_RNA[idx], phi_pellet);
+        observed_supernate_RNA[idx] ~ neg_binomial_2(alpha_supernate*actual_total_RNA[idx], phi_supernate);
+      }
+    }
+     ",data=stan_data, chains = 1, iter =1000)
+}
+```
+
+```{r run_stan_NBmodel_parameter_calc, dependson="pellet_supernate_obs_NBmodel_parameter_calc_stan"}
+# Separate the open reading frames with sufficient transcript counts in all four conditions, ignore poor data.
+wd5_TSP_Tot <- 
+    TSP_Count_TPM %>%
+    filter(Fraction=="Tot") %>%
+    group_by(ORF) %>%
+    summarise(d5 = sum(TPM > 5),wd5=(d5==4)) %>%
+    filter(wd5) %>%
+    .$ORF
+
+# Rearrange data.frame such that there is only one row for each ORF/Condition pair, instead of three (one for each p100, sup and tot count), by introducing three columns, p100, sup and tot. Then filter the poor quality data calculated above.
+TSP_Count_FracBySample <- 
+    TSP_Count_TPM %>%
+    ungroup() %>%
+    select(Condition,Fraction,ORF,Count) %>%
+    spread(Fraction,Count) %>%
+    filter(ORF %in% wd5_TSP_Tot)
+
+## format data for stan 
+experimental_data_pellet_supernate <-  list(NRNA=length(filter(TSP_Count_FracBySample, Condition == "30C")$P100), 
+         NRNA_simulated=length(real_tot_simulated$simulated_actual_total_RNA_counts),
+         observed_pellet_RNA=as.integer(round(filter(TSP_Count_FracBySample, Condition == "30C")$P100)), observed_supernate_RNA=as.integer(round(filter(TSP_Count_FracBySample, Condition == "30C")$Sup)), actual_total_RNA =as.integer(real_tot_simulated$simulated_actual_total_RNA_counts))
+
+# run stan model
+pellet_supernate_observation_simulations_parameters <- NB_parameter_calc(experimental_data_pellet_supernate)
+
+# run shinystan
+#launch_shinystan(tot_obs_simulations_parameters)
+```
+
+```{r simulate_actual_RNA_counts_from_stanfit_parameters}
+# Extract inferred parameters, alpha and phi, for negative binomial used to simulate RNA count data from stanfit
+negbin_alpha_pellet <- pellet_supernate_observation_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(alpha_pellet)
+negbin_phi_pellet <- pellet_supernate_observation_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(phi_pellet)
+negbin_alpha_supernate <- pellet_supernate_observation_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(alpha_supernate)
+negbin_phi_supernate <- pellet_supernate_observation_simulations_parameters %>%    
+                  rstan::extract() %$% 
+                      mean(phi_supernate)
+simulated_observed_pellet_RNA_counts <- c(1:5000)
+simulated_observed_supernate_RNA_counts <- c(1:5000)
+for(idx in 1:5000){
+simulated_observed_pellet_RNA_counts[idx] <- rnbinom(1,mu=negbin_alpha_pellet*as.integer(real_tot_simulated$simulated_actual_total_RNA_counts[idx]), size=negbin_phi_pellet)
+simulated_observed_supernate_RNA_counts[idx] <- rnbinom(1,mu=negbin_alpha_supernate*as.integer(real_tot_simulated$simulated_actual_total_RNA_counts[idx]), size=negbin_phi_supernate)
+}
+write_tsv(data.frame(simulated_pellet_total_RNA_counts = simulated_observed_pellet_RNA_counts), path = "../data_processed/observed_pellet_simulation_data.tsv")
+write_tsv(data.frame(simulated_supernate_total_RNA_counts = simulated_observed_supernate_RNA_counts), path = "../data_processed/observed_supernate_simulation_data.tsv")
+```
